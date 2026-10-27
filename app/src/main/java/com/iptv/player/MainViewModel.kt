@@ -55,7 +55,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var error by mutableStateOf<String?>(null)
     var query by mutableStateOf("")
     var selectedGroup by mutableStateOf<String?>(null)
-    var showFavorites by mutableStateOf(false)
+    var tab by mutableStateOf(0) // 0 = Live, 1 = Favorites, 2 = Playlists
     var current by mutableStateOf<Channel?>(null)
     var playerError by mutableStateOf<String?>(null)
 
@@ -175,6 +175,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun applyChannels(id: Long, parsed: List<Channel>) {
         channels = parsed
         selectedGroup = null
+        tab = 0
         activePlaylistId = id
         prefs.edit().putLong("active", id).apply()
     }

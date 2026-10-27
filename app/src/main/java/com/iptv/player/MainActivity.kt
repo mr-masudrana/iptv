@@ -41,8 +41,10 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            MaterialTheme {
-                Surface(Modifier.fillMaxSize()) { AppRoot(vm, inPip) }
+            IptvTheme {
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    AppRoot(vm, inPip)
+                }
             }
         }
     }

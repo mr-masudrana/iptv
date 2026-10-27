@@ -10,7 +10,9 @@
     <application
         android:label="IPTV Player"
         android:usesCleartextTraffic="true"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:icon="@drawable/ic_launcher"
+        android:roundIcon="@drawable/ic_launcher"
+        android:theme="@style/Theme.IPTV">
 
         <activity
             android:name=".MainActivity"
