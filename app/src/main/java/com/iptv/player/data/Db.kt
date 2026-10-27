@@ -9,6 +9,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
+import androidx.room.Update
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
@@ -53,6 +54,9 @@ interface PlaylistDao {
 
     @Insert
     suspend fun insert(p: PlaylistEntity): Long
+
+    @Update
+    suspend fun update(p: PlaylistEntity)
 
     @Query("DELETE FROM playlists WHERE id = :id")
     suspend fun delete(id: Long)

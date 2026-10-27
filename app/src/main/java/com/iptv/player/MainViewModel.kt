@@ -2,7 +2,6 @@ package com.iptv.player
 
 import android.app.Application
 import android.content.ComponentName
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -38,7 +37,6 @@ import java.util.concurrent.TimeUnit
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val prefs = app.getSharedPreferences("iptv", Context.MODE_PRIVATE)
     private val db = AppDatabase.get(app)
     private val favDao = db.favoriteDao()
     private val playlistDao = db.playlistDao()
@@ -48,18 +46,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         .build()
 
     // ---- UI state ----
-    var urlInput by mutableStateOf("")
+    var screen by mutableStateOf(0) // 0 = playlist list, 1 = live channels
+    var activePlaylist by mutableStateOf<PlaylistEntity?>(null)
     var channels by mutableStateOf(emptyList<Channel>())
-    var activePlaylistId by mutableStateOf(prefs.getLong("active", -1L))
     var loading by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
     var query by mutableStateOf("")
     var selectedGroup by mutableStateOf<String?>(null)
-    var tab by mutableStateOf(0) // 0 = Live, 1 = Favorites, 2 = Playlists
+    var showFavorites by mutableStateOf(false)
     var current by mutableStateOf<Channel?>(null)
     var playerError by mutableStateOf<String?>(null)
 
-    // Player (lives in PlaybackService; we talk to it through a MediaController)
+    // Player lives in PlaybackService; we talk to it through a MediaController
     var controller by mutableStateOf<MediaController?>(null)
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var pending: Channel? = null
@@ -68,7 +66,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         .map { list -> list.map { Channel(it.name, it.url, it.logo, it.groupName) } }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    // null = still loading from the database
     val playlists: StateFlow<List<PlaylistEntity>?> = playlistDao.all()
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
@@ -91,14 +88,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val c = future.get()
                 c.addListener(playerListener)
                 controller = c
-                c.currentMediaItem?.let { mi ->
-                    current = Channel(
-                        mi.mediaMetadata.title?.toString().orEmpty(),
-                        mi.localConfiguration?.uri?.toString().orEmpty(),
-                        mi.mediaMetadata.artworkUri?.toString(),
-                        ""
-                    )
-                }
                 pending?.let {
                     pending = null
                     play(it)
@@ -107,32 +96,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 playerError = "Player unavailable"
             }
         }, ContextCompat.getMainExecutor(app))
-
-        // Re-open the last used playlist
-        viewModelScope.launch {
-            val list = playlistDao.allOnce()
-            val active = list.firstOrNull { it.id == activePlaylistId } ?: list.firstOrNull()
-            if (active != null) selectPlaylist(active)
-        }
     }
 
-    // ---- Playlists ----
+    // ---- Playlist list (home page) ----
 
-    fun addPlaylist(source: String, isFile: Boolean, name: String) {
-        val s = source.trim()
-        if (s.isEmpty()) {
-            error = "Enter a playlist URL"
-            return
-        }
-        runLoad {
-            val parsed = fetch(s, isFile)
-            if (parsed.isEmpty()) {
-                error = "No channels found in this playlist"
-            } else {
-                val title = name.ifBlank { Uri.parse(s).host ?: "Playlist" }
-                val id = playlistDao.insert(PlaylistEntity(name = title, source = s, isFile = isFile))
-                applyChannels(id, parsed)
-            }
+    fun addPlaylistUrl(name: String, url: String) {
+        val u = url.trim()
+        if (u.isEmpty()) return
+        viewModelScope.launch {
+            val title = name.trim().ifBlank { Uri.parse(u).host ?: "Playlist" }
+            playlistDao.insert(PlaylistEntity(name = title, source = u, isFile = false))
         }
     }
 
@@ -141,7 +114,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         try {
             resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         } catch (e: Exception) {
-            // not all providers allow persistable permission; reading now still works
+            // not every provider allows a persistable permission; reading right now still works
         }
         val name = try {
             resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
@@ -150,46 +123,68 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: Exception) {
             null
         } ?: "Local playlist"
-        addPlaylist(uri.toString(), true, name)
+        viewModelScope.launch {
+            playlistDao.insert(PlaylistEntity(name = name, source = uri.toString(), isFile = true))
+        }
     }
 
-    fun selectPlaylist(p: PlaylistEntity) {
-        runLoad {
-            val parsed = fetch(p.source, p.isFile)
-            if (parsed.isEmpty()) error = "No channels found in this playlist"
-            else applyChannels(p.id, parsed)
+    fun updatePlaylist(p: PlaylistEntity, name: String, source: String) {
+        viewModelScope.launch {
+            playlistDao.update(
+                p.copy(
+                    name = name.trim().ifBlank { p.name },
+                    source = if (p.isFile) p.source else source.trim().ifBlank { p.source }
+                )
+            )
         }
     }
 
     fun deletePlaylist(p: PlaylistEntity) {
-        viewModelScope.launch {
-            playlistDao.delete(p.id)
-            if (activePlaylistId == p.id) {
-                activePlaylistId = -1L
-                channels = emptyList()
-                prefs.edit().remove("active").apply()
-            }
-        }
+        viewModelScope.launch { playlistDao.delete(p.id) }
     }
 
-    private fun applyChannels(id: Long, parsed: List<Channel>) {
-        channels = parsed
+    // ---- Live page ----
+
+    fun openPlaylist(p: PlaylistEntity) {
+        activePlaylist = p
+        channels = emptyList()
+        query = ""
         selectedGroup = null
-        tab = 0
-        activePlaylistId = id
-        prefs.edit().putLong("active", id).apply()
+        showFavorites = false
+        error = null
+        screen = 1
+        load(p)
     }
 
-    private fun runLoad(block: suspend () -> Unit) {
+    fun refresh() {
+        activePlaylist?.let { load(it) }
+    }
+
+    fun closeLive() {
+        pending = null
+        controller?.run {
+            stop()
+            clearMediaItems()
+        }
+        current = null
+        playerError = null
+        screen = 0
+    }
+
+    private fun load(p: PlaylistEntity) {
         viewModelScope.launch {
             loading = true
             error = null
             try {
-                block()
+                val parsed = fetch(p.source, p.isFile)
+                if (activePlaylist?.id == p.id) {
+                    if (parsed.isEmpty()) error = "No channels found in this playlist"
+                    else channels = parsed
+                }
             } catch (e: Exception) {
-                error = e.message ?: "Failed to load playlist"
+                if (activePlaylist?.id == p.id) error = e.message ?: "Failed to load playlist"
             } finally {
-                loading = false
+                if (activePlaylist?.id == p.id) loading = false
             }
         }
     }
