@@ -1,6 +1,9 @@
 package com.iptv.player
 
+import android.app.Activity
+import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.view.View
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -17,13 +20,17 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -36,6 +43,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -44,15 +53,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.Player
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
@@ -60,34 +76,20 @@ import coil.compose.AsyncImagePainter
 import com.iptv.player.data.Channel
 import com.iptv.player.data.PlaylistEntity
 
-// ───────────────────────── Root ─────────────────────────
+// ───────────────────────── Root: Playlist → Channels → Player ─────────────────────────
 
 @Composable
 fun AppRoot(vm: MainViewModel, inPip: Boolean) {
-    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-    val live = vm.screen == 1
-
-    // Back from the live page returns to the playlist page
-    BackHandler(enabled = live) { vm.closeLive() }
+    BackHandler(enabled = vm.screen == 2) { vm.closePlayer() }
+    BackHandler(enabled = vm.screen == 1) { vm.closeChannels() }
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        when {
-            live && vm.current != null && (landscape || inPip) ->
-                PlayerBox(vm.controller, Modifier.fillMaxSize().background(Color.Black))
-            live -> LiveScreen(vm)
+        when (vm.screen) {
+            2 -> PlayerScreen(vm, inPip)
+            1 -> ChannelsScreen(vm)
             else -> PlaylistScreen(vm)
         }
     }
-}
-
-@Composable
-fun PlayerBox(exo: Player?, modifier: Modifier) {
-    AndroidView(
-        factory = { ctx -> PlayerView(ctx).apply { player = exo; keepScreenOn = true } },
-        update = { it.player = exo },
-        onRelease = { it.player = null },
-        modifier = modifier
-    )
 }
 
 // ───────────────────────── Playlist page ─────────────────────────
@@ -307,13 +309,22 @@ fun EditPlaylistDialog(
     )
 }
 
-// ───────────────────────── Live page ─────────────────────────
+// ───────────────────────── Channels page ─────────────────────────
 
 @Composable
-fun LiveScreen(vm: MainViewModel) {
+fun ChannelsScreen(vm: MainViewModel) {
     val cs = MaterialTheme.colorScheme
     val favs by vm.favorites.collectAsState()
     val favUrls = remember(favs) { favs.map { it.url }.toSet() }
+    var searching by remember { mutableStateOf(false) }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(searching) { if (searching) focus.requestFocus() }
+    // Registered after AppRoot's handler, so it wins while the search box is open
+    BackHandler(enabled = searching) {
+        searching = false
+        vm.query = ""
+    }
+
     val groups = remember(vm.channels) { vm.channels.map { it.group }.distinct().sorted() }
     val source = if (vm.showFavorites) favs else vm.channels
     val list = remember(source, vm.query, vm.selectedGroup, vm.showFavorites) {
@@ -322,139 +333,90 @@ fun LiveScreen(vm: MainViewModel) {
                 c.name.contains(vm.query, ignoreCase = true)
         }
     }
-    val current = vm.current
 
     Column(Modifier.fillMaxSize()) {
-        // Player
-        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color.Black)) {
-            PlayerBox(vm.controller, Modifier.fillMaxSize())
-            if (current == null) {
-                Text(
-                    "চ্যানেল বেছে নিন",
-                    color = Color(0x88FFFFFF),
-                    modifier = Modifier.align(Alignment.Center)
-                )
-            }
-        }
-
-        // Info strip: channel count, or the playing channel
+        // Top bar
         Row(
-            Modifier
-                .fillMaxWidth()
-                .background(cs.surface)
-                .heightIn(min = 56.dp)
-                .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (current == null) {
-                Text(
-                    "${vm.channels.size} চ্যানেল",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f)
+            if (searching) {
+                IconButton(onClick = {
+                    searching = false
+                    vm.query = ""
+                }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close search") }
+                OutlinedTextField(
+                    value = vm.query,
+                    onValueChange = { vm.query = it },
+                    placeholder = { Text("Search channels") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.weight(1f).focusRequester(focus).padding(end = 8.dp)
                 )
             } else {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        current.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        LiveBadge()
-                        if (current.group.isNotBlank()) {
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                current.group,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = cs.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                    vm.playerError?.let {
-                        Text(it, style = MaterialTheme.typography.bodySmall, color = cs.error)
-                    }
+                IconButton(onClick = { vm.closeChannels() }) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                 }
-                val isFav = current.url in favUrls
-                IconButton(onClick = { vm.toggleFavorite(current) }) {
-                    Icon(
-                        if (isFav) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                        contentDescription = "Favorite",
-                        tint = if (isFav) HeartPink else cs.onSurfaceVariant
+                Column(Modifier.weight(1f).padding(start = 8.dp)) {
+                    Text(
+                        "Channels",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold
                     )
+                    Text(
+                        "${list.size} channels",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = cs.onSurfaceVariant
+                    )
+                }
+                IconButton(onClick = { vm.refresh() }) {
+                    Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
+                }
+                IconButton(onClick = { vm.showFavorites = !vm.showFavorites }) {
+                    Icon(
+                        Icons.Filled.Star,
+                        contentDescription = "Favorites",
+                        tint = if (vm.showFavorites) cs.primary else cs.onSurfaceVariant
+                    )
+                }
+                IconButton(onClick = { searching = true }) {
+                    Icon(Icons.Filled.Search, contentDescription = "Search")
                 }
             }
         }
 
         if (vm.loading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = cs.primary)
 
-        // Search + refresh
-        Row(
-            Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            OutlinedTextField(
-                value = vm.query,
-                onValueChange = { vm.query = it },
-                placeholder = { Text("চ্যানেল খুঁজুন...") },
-                singleLine = true,
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier.weight(1f)
-            )
-            IconButton(onClick = { vm.refresh() }) {
-                Icon(Icons.Filled.Refresh, contentDescription = "Refresh", tint = cs.primary)
-            }
-        }
-
-        // Category chips
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            item {
-                Pill("All", !vm.showFavorites && vm.selectedGroup == null) {
-                    vm.showFavorites = false
-                    vm.selectedGroup = null
-                }
-            }
-            item {
-                Pill("পছন্দের (${favs.size})", vm.showFavorites) {
-                    vm.showFavorites = true
-                    vm.selectedGroup = null
-                }
-            }
-            items(groups) { g ->
-                Pill(g, !vm.showFavorites && vm.selectedGroup == g) {
-                    vm.showFavorites = false
-                    vm.selectedGroup = g
-                }
+        if (!vm.showFavorites && groups.size > 1) {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                item { Pill("All", vm.selectedGroup == null) { vm.selectedGroup = null } }
+                items(groups) { g -> Pill(g, vm.selectedGroup == g) { vm.selectedGroup = g } }
             }
         }
 
         when {
             vm.error != null && vm.channels.isEmpty() -> EmptyState(
-                title = "প্লেলিস্ট লোড হয়নি",
+                title = "Couldn't load playlist",
                 body = vm.error.orEmpty()
             )
             vm.channels.isEmpty() && !vm.loading -> EmptyState(
-                title = "কোনো চ্যানেল পাওয়া যায়নি",
-                body = "রিফ্রেশ করে আবার চেষ্টা করুন।"
+                title = "No channels found",
+                body = "Tap refresh to try again."
             )
             vm.showFavorites && favs.isEmpty() -> EmptyState(
-                title = "কোনো পছন্দের চ্যানেল নেই",
-                body = "চ্যানেলের হার্ট আইকনে চাপ দিন।"
+                title = "No favorites yet",
+                body = "Tap the heart on a channel to keep it here."
             )
             list.isEmpty() && !vm.loading -> EmptyState(
-                title = "কিছু পাওয়া যায়নি",
-                body = "অন্য নাম বা গ্রুপ দিয়ে চেষ্টা করুন।"
+                title = "No matches",
+                body = "Try a different name or group."
             )
             else -> LazyVerticalGrid(
                 columns = GridCells.Adaptive(104.dp),
-                contentPadding = PaddingValues(12.dp),
+                contentPadding = PaddingValues(10.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.fillMaxSize()
@@ -462,9 +424,8 @@ fun LiveScreen(vm: MainViewModel) {
                 items(list) { c ->
                     ChannelCard(
                         c = c,
-                        selected = current?.url == c.url,
                         isFav = c.url in favUrls,
-                        onClick = { vm.play(c) },
+                        onClick = { vm.openChannel(c) },
                         onFav = { vm.toggleFavorite(c) }
                     )
                 }
@@ -474,17 +435,74 @@ fun LiveScreen(vm: MainViewModel) {
 }
 
 @Composable
-fun LiveBadge() {
-    Row(
+fun ChannelCard(c: Channel, isFav: Boolean, onClick: () -> Unit, onFav: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(14.dp)
+    Column(
         Modifier
-            .clip(RoundedCornerShape(50))
-            .background(TallyRed.copy(alpha = 0.18f))
-            .padding(horizontal = 8.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .clip(shape)
+            .background(cs.surfaceVariant)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Box(Modifier.size(6.dp).clip(CircleShape).background(TallyRed))
-        Spacer(Modifier.width(5.dp))
-        Text("LIVE", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TallyRed)
+        Box {
+            ChannelLogo(
+                c,
+                Modifier.fillMaxWidth().aspectRatio(1f).clip(CircleShape).background(Color.White)
+            )
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .size(26.dp)
+                    .clip(CircleShape)
+                    .background(Color(0x99000000))
+                    .clickable(onClick = onFav),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    if (isFav) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                    contentDescription = "Favorite",
+                    tint = if (isFav) HeartPink else Color.White,
+                    modifier = Modifier.size(15.dp)
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            c.name,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = cs.onSurface,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+@Composable
+fun ChannelLogo(c: Channel, modifier: Modifier) {
+    var loaded by remember(c.logo) { mutableStateOf(false) }
+    Box(modifier, contentAlignment = Alignment.Center) {
+        if (!loaded) {
+            Text(
+                c.name.trim().take(1).uppercase().ifEmpty { "?" },
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF0A1020)
+            )
+        }
+        if (!c.logo.isNullOrBlank()) {
+            AsyncImage(
+                model = c.logo,
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                onState = { loaded = it is AsyncImagePainter.State.Success },
+                modifier = Modifier.fillMaxSize().padding(12.dp)
+            )
+        }
     }
 }
 
@@ -523,77 +541,145 @@ fun EmptyState(title: String, body: String) {
     }
 }
 
+// ───────────────────────── Player page ─────────────────────────
+
 @Composable
-fun ChannelCard(
-    c: Channel,
-    selected: Boolean,
-    isFav: Boolean,
-    onClick: () -> Unit,
-    onFav: () -> Unit
-) {
+fun PlayerScreen(vm: MainViewModel, inPip: Boolean) {
     val cs = MaterialTheme.colorScheme
-    val shape = RoundedCornerShape(16.dp)
-    Column(
-        Modifier
-            .clip(shape)
-            .background(cs.surfaceVariant)
-            .border(if (selected) 2.dp else 1.dp, if (selected) cs.primary else cs.outline, shape)
-            .clickable(onClick = onClick)
-    ) {
-        Box {
-            ChannelLogo(c, Modifier.fillMaxWidth().aspectRatio(1.3f).background(LogoTile))
-            Box(
-                Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(6.dp)
-                    .size(28.dp)
-                    .clip(CircleShape)
-                    .background(Color(0x66000000))
-                    .clickable(onClick = onFav),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    if (isFav) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                    contentDescription = "Favorite",
-                    tint = if (isFav) HeartPink else Color.White,
-                    modifier = Modifier.size(16.dp)
-                )
+    val activity = LocalContext.current as? Activity
+    val view = LocalView.current
+    val favs by vm.favorites.collectAsState()
+    val c = vm.current
+    var locked by remember { mutableStateOf(false) }
+    var controlsVisible by remember { mutableStateOf(true) }
+
+    // Immersive while watching; restore bars and orientation on exit
+    DisposableEffect(Unit) {
+        val insets = activity?.window?.let { WindowCompat.getInsetsController(it, view) }
+        insets?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        insets?.hide(WindowInsetsCompat.Type.systemBars())
+        onDispose {
+            insets?.show(WindowInsetsCompat.Type.systemBars())
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        VideoSurface(
+            exo = vm.controller,
+            locked = locked,
+            inPip = inPip,
+            onControls = { controlsVisible = it },
+            onFullscreen = {
+                activity?.let { a ->
+                    val landscape =
+                        a.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+                    a.requestedOrientation =
+                        if (landscape) ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                        else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        vm.playerError?.let {
+            Text(
+                it,
+                color = Color.White,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.align(Alignment.Center).padding(24.dp)
+            )
+        }
+
+        if (!inPip && c != null) {
+            if (locked) {
+                IconButton(
+                    onClick = { locked = false },
+                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
+                ) { Icon(Icons.Filled.Lock, contentDescription = "Unlock", tint = cs.primary) }
+            } else if (controlsVisible) {
+                Row(
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .fillMaxWidth()
+                        .background(Brush.verticalGradient(listOf(Color(0xCC000000), Color.Transparent)))
+                        .padding(horizontal = 4.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = { vm.closePlayer() }) {
+                        Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
+                    }
+                    Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
+                        Text(
+                            c.name,
+                            color = Color.White,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(Modifier.height(3.dp))
+                        LiveBadge()
+                    }
+                    val isFav = favs.any { it.url == c.url }
+                    IconButton(onClick = { vm.toggleFavorite(c) }) {
+                        Icon(
+                            if (isFav) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                            contentDescription = "Favorite",
+                            tint = if (isFav) HeartPink else Color.White
+                        )
+                    }
+                    IconButton(onClick = { locked = true }) {
+                        Icon(Icons.Filled.Lock, contentDescription = "Lock controls", tint = Color.White)
+                    }
+                }
             }
         }
-        Text(
-            c.name,
-            fontSize = 12.sp,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-            color = if (selected) cs.primary else cs.onSurface,
-            textAlign = TextAlign.Center,
-            maxLines = 2,
-            minLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp)
-        )
     }
 }
 
 @Composable
-fun ChannelLogo(c: Channel, modifier: Modifier) {
-    var loaded by remember(c.logo) { mutableStateOf(false) }
-    Box(modifier, contentAlignment = Alignment.Center) {
-        if (!loaded) {
-            Text(
-                c.name.trim().take(1).uppercase().ifEmpty { "?" },
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
-        }
-        if (!c.logo.isNullOrBlank()) {
-            AsyncImage(
-                model = c.logo,
-                contentDescription = null,
-                contentScale = ContentScale.Fit,
-                onState = { loaded = it is AsyncImagePainter.State.Success },
-                modifier = Modifier.fillMaxSize().padding(14.dp)
-            )
-        }
+fun VideoSurface(
+    exo: Player?,
+    locked: Boolean,
+    inPip: Boolean,
+    onControls: (Boolean) -> Unit,
+    onFullscreen: () -> Unit,
+    modifier: Modifier
+) {
+    AndroidView(
+        factory = { ctx ->
+            PlayerView(ctx).apply {
+                player = exo
+                keepScreenOn = true
+                controllerShowTimeoutMs = 3500
+                setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
+                setControllerVisibilityListener(
+                    PlayerView.ControllerVisibilityListener { v -> onControls(v == View.VISIBLE) }
+                )
+                setFullscreenButtonClickListener { _ -> onFullscreen() }
+            }
+        },
+        update = {
+            it.player = exo
+            it.useController = !locked && !inPip
+        },
+        onRelease = { it.player = null },
+        modifier = modifier
+    )
+}
+
+@Composable
+fun LiveBadge() {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(TallyRed.copy(alpha = 0.25f))
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(6.dp).clip(CircleShape).background(TallyRed))
+        Spacer(Modifier.width(5.dp))
+        Text("LIVE", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TallyRed)
     }
 }

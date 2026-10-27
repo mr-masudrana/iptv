@@ -46,7 +46,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         .build()
 
     // ---- UI state ----
-    var screen by mutableStateOf(0) // 0 = playlist list, 1 = live channels
+    var screen by mutableStateOf(0) // 0 = playlists, 1 = channels, 2 = player
     var activePlaylist by mutableStateOf<PlaylistEntity?>(null)
     var channels by mutableStateOf(emptyList<Channel>())
     var loading by mutableStateOf(false)
@@ -160,7 +160,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         activePlaylist?.let { load(it) }
     }
 
-    fun closeLive() {
+    fun closeChannels() {
+        query = ""
+        showFavorites = false
+        selectedGroup = null
+        screen = 0
+    }
+
+    fun openChannel(c: Channel) {
+        play(c)
+        screen = 2
+    }
+
+    fun closePlayer() {
         pending = null
         controller?.run {
             stop()
@@ -168,7 +180,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         current = null
         playerError = null
-        screen = 0
+        screen = 1
     }
 
     private fun load(p: PlaylistEntity) {
