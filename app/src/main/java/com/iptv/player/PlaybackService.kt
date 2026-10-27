@@ -34,7 +34,11 @@ class PlaybackService : MediaSessionService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        pauseAllPlayersAndStopSelf()
+        session?.player?.run {
+            pause()
+            stop()
+        }
+        stopSelf()
     }
 
     override fun onDestroy() {
