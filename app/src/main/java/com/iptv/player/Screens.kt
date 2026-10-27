@@ -120,7 +120,7 @@ fun PlaylistScreen(vm: MainViewModel) {
                 DropdownMenu(
                     expanded = menu,
                     onDismissRequest = { menu = false },
-                    containerColor = MaterialTheme.colorScheme.surface
+                    modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                 ) {
                     DropdownMenuItem(
                         text = { Text("Add URL") },
