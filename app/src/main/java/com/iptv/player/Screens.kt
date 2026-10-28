@@ -1,6 +1,13 @@
 package com.iptv.player
 
 import android.app.Activity
+import android.content.Context
+import android.media.AudioManager
+import android.provider.Settings
+import android.view.WindowManager
+import android.app.PictureInPictureParams
+import android.os.Build
+import android.util.Rational
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.view.View
@@ -10,15 +17,22 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
@@ -28,9 +42,12 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -39,9 +56,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.PullToRefreshContainer
+import androidx.compose.material3.rememberPullToRefreshState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -49,38 +71,59 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.Player
+import androidx.media3.common.C
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.AspectRatioFrameLayout
 import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
 import com.iptv.player.data.Channel
 import com.iptv.player.data.PlaylistEntity
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
 
 // ───────────────────────── Root: Playlist → Channels → Player ─────────────────────────
 
 @Composable
-fun AppRoot(vm: MainViewModel, inPip: Boolean) {
-    BackHandler(enabled = vm.screen == 2) { vm.closePlayer() }
+fun AppRoot(vm: MainViewModel, inPip: Boolean, onEnterPip: () -> Boolean) {
+    // Back on the player: float the video (picture-in-picture); if that is not possible, close it
+    BackHandler(enabled = vm.screen == 2) {
+        if (!onEnterPip()) vm.closePlayer()
+    }
     BackHandler(enabled = vm.screen == 1) { vm.closeChannels() }
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -100,6 +143,7 @@ fun PlaylistScreen(vm: MainViewModel) {
     val list = playlists.orEmpty()
     var menu by remember { mutableStateOf(false) }
     var showAdd by remember { mutableStateOf(false) }
+    var showStream by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<PlaylistEntity?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.importFile(uri)
@@ -111,8 +155,9 @@ fun PlaylistScreen(vm: MainViewModel) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                "Playlist",
+                "IPTV Player",
                 style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f)
             )
             Box {
@@ -138,6 +183,13 @@ fun PlaylistScreen(vm: MainViewModel) {
                             picker.launch(arrayOf("*/*"))
                         }
                     )
+                    DropdownMenuItem(
+                        text = { Text("Stream URL") },
+                        onClick = {
+                            menu = false
+                            showStream = true
+                        }
+                    )
                 }
             }
         }
@@ -148,15 +200,7 @@ fun PlaylistScreen(vm: MainViewModel) {
                 body = "Tap the menu at the top right, then choose Add URL or Select File."
             )
         } else {
-            LazyColumn(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                items(list, key = { it.id }) { p ->
-                    PlaylistCard(p, onClick = { vm.openPlaylist(p) }, onEdit = { editing = p })
-                }
-            }
+            ReorderablePlaylists(vm, list, onEdit = { editing = it })
         }
     }
 
@@ -166,6 +210,15 @@ fun PlaylistScreen(vm: MainViewModel) {
             onAdd = { name, url ->
                 vm.addPlaylistUrl(name, url)
                 showAdd = false
+            }
+        )
+    }
+    if (showStream) {
+        StreamUrlDialog(
+            onDismiss = { showStream = false },
+            onPlay = { url ->
+                showStream = false
+                vm.playStream(url)
             }
         )
     }
@@ -185,12 +238,150 @@ fun PlaylistScreen(vm: MainViewModel) {
     }
 }
 
+/** Playlist list: long-press a card, then drag it up or down to reorder. */
 @Composable
-fun PlaylistCard(p: PlaylistEntity, onClick: () -> Unit, onEdit: () -> Unit) {
+fun ReorderablePlaylists(
+    vm: MainViewModel,
+    list: List<PlaylistEntity>,
+    onEdit: (PlaylistEntity) -> Unit
+) {
+    val listState = rememberLazyListState()
+    val haptic = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+    val currentList by rememberUpdatedState(list)
+
+    var local by remember { mutableStateOf<List<PlaylistEntity>?>(null) } // order while dragging
+    var draggingKey by remember { mutableStateOf<Long?>(null) }
+    var dragDelta by remember { mutableStateOf(0f) }
+    var suppressClick by remember { mutableStateOf(false) }
+    val shown = local ?: list
+
+    // Drop the temporary order once the database order has caught up
+    LaunchedEffect(list) {
+        val l = local
+        if (l != null && draggingKey == null) {
+            val a = l.map { it.id }
+            val b = list.map { it.id }
+            if (a == b || a.toSet() != b.toSet()) local = null
+        }
+    }
+
+    fun trySwap() {
+        val key = draggingKey ?: return
+        val infos = listState.layoutInfo.visibleItemsInfo
+        val info = infos.firstOrNull { it.key == key } ?: return
+        val center = info.offset + dragDelta + info.size / 2f
+        val target = infos.firstOrNull {
+            it.key != key && center >= it.offset && center <= it.offset + it.size
+        } ?: return
+        val cur = local ?: return
+        val from = cur.indexOfFirst { it.id == key }
+        val to = cur.indexOfFirst { it.id == target.key }
+        if (from < 0 || to < 0 || from == to) return
+        local = cur.toMutableList().apply { add(to, removeAt(from)) }
+        val newOffset = if (to > from) target.offset + target.size - info.size else target.offset
+        dragDelta += (info.offset - newOffset)
+    }
+
+    fun finish(commit: Boolean) {
+        val l = local
+        draggingKey = null
+        dragDelta = 0f
+        if (commit && l != null && l.map { it.id } != currentList.map { it.id }) {
+            vm.reorderPlaylists(l)
+        } else {
+            local = null
+        }
+        scope.launch {
+            delay(150)
+            suppressClick = false
+        }
+    }
+
+    // Keep scrolling while the dragged card is held near the top or bottom edge
+    LaunchedEffect(draggingKey) {
+        while (draggingKey != null) {
+            val key = draggingKey
+            val info = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
+            if (info != null) {
+                val top = info.offset + dragDelta
+                val bottom = top + info.size
+                val step = when {
+                    bottom > listState.layoutInfo.viewportEndOffset - 40 -> 16f
+                    top < listState.layoutInfo.viewportStartOffset + 40 -> -16f
+                    else -> 0f
+                }
+                if (step != 0f) {
+                    dragDelta += listState.scrollBy(step)
+                    trySwap()
+                }
+            }
+            delay(16)
+        }
+    }
+
+    LazyColumn(
+        state = listState,
+        userScrollEnabled = draggingKey == null,
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { offset ->
+                        val y = offset.y.toInt()
+                        val hit = listState.layoutInfo.visibleItemsInfo
+                            .firstOrNull { y >= it.offset && y <= it.offset + it.size }
+                        if (hit != null) {
+                            draggingKey = hit.key as? Long
+                            dragDelta = 0f
+                            local = currentList
+                            suppressClick = true
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        }
+                    },
+                    onDrag = { change, amount ->
+                        if (draggingKey != null) {
+                            change.consume()
+                            dragDelta += amount.y
+                            trySwap()
+                        }
+                    },
+                    onDragEnd = { finish(true) },
+                    onDragCancel = { finish(false) }
+                )
+            }
+    ) {
+        items(shown, key = { it.id }) { p ->
+            val dragging = p.id == draggingKey
+            PlaylistCard(
+                p,
+                modifier = Modifier
+                    .zIndex(if (dragging) 1f else 0f)
+                    .graphicsLayer {
+                        translationY = if (dragging) dragDelta else 0f
+                        scaleX = if (dragging) 1.03f else 1f
+                        scaleY = if (dragging) 1.03f else 1f
+                    },
+                onClick = { if (!suppressClick) vm.openPlaylist(p) },
+                onEdit = { onEdit(p) }
+            )
+        }
+    }
+}
+
+@Composable
+fun PlaylistCard(
+    p: PlaylistEntity,
+    onClick: () -> Unit,
+    onEdit: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     val cs = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(16.dp)
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
             .clip(shape)
             .background(cs.surface)
@@ -263,6 +454,34 @@ fun AddUrlDialog(onDismiss: () -> Unit, onAdd: (name: String, url: String) -> Un
 }
 
 @Composable
+fun StreamUrlDialog(onDismiss: () -> Unit, onPlay: (url: String) -> Unit) {
+    var url by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = { Text("Stream URL") },
+        text = {
+            OutlinedTextField(
+                value = url,
+                onValueChange = { url = it },
+                label = { Text("Stream link (.m3u8)") },
+                placeholder = { Text("https://") },
+                maxLines = 3,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onPlay(url) },
+                enabled = url.trim().startsWith("http", ignoreCase = true)
+            ) { Text("Play") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
 fun EditPlaylistDialog(
     p: PlaylistEntity,
     onDismiss: () -> Unit,
@@ -311,6 +530,7 @@ fun EditPlaylistDialog(
 
 // ───────────────────────── Channels page ─────────────────────────
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChannelsScreen(vm: MainViewModel) {
     val cs = MaterialTheme.colorScheme
@@ -325,6 +545,16 @@ fun ChannelsScreen(vm: MainViewModel) {
         vm.query = ""
     }
 
+    // Pull down to refresh
+    val pull = rememberPullToRefreshState()
+    LaunchedEffect(pull.isRefreshing) {
+        if (pull.isRefreshing) {
+            vm.refresh()
+            snapshotFlow { vm.loading }.first { !it }
+            pull.endRefresh()
+        }
+    }
+
     val groups = remember(vm.channels) { vm.channels.map { it.group }.distinct().sorted() }
     val source = if (vm.showFavorites) favs else vm.channels
     val list = remember(source, vm.query, vm.selectedGroup, vm.showFavorites) {
@@ -335,7 +565,7 @@ fun ChannelsScreen(vm: MainViewModel) {
     }
 
     Column(Modifier.fillMaxSize()) {
-        // Top bar
+        // Top bar: back, playlist name, search
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -359,24 +589,16 @@ fun ChannelsScreen(vm: MainViewModel) {
                 }
                 Column(Modifier.weight(1f).padding(start = 8.dp)) {
                     Text(
-                        "Channels",
+                        vm.activePlaylist?.name.orEmpty(),
                         style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         "${list.size} channels",
                         style = MaterialTheme.typography.bodySmall,
                         color = cs.onSurfaceVariant
-                    )
-                }
-                IconButton(onClick = { vm.refresh() }) {
-                    Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
-                }
-                IconButton(onClick = { vm.showFavorites = !vm.showFavorites }) {
-                    Icon(
-                        Icons.Filled.Star,
-                        contentDescription = "Favorites",
-                        tint = if (vm.showFavorites) cs.primary else cs.onSurfaceVariant
                     )
                 }
                 IconButton(onClick = { searching = true }) {
@@ -385,51 +607,76 @@ fun ChannelsScreen(vm: MainViewModel) {
             }
         }
 
-        if (vm.loading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = cs.primary)
+        if (vm.loading && !pull.isRefreshing) {
+            LinearProgressIndicator(Modifier.fillMaxWidth(), color = cs.primary)
+        }
 
-        if (!vm.showFavorites && groups.size > 1) {
+        // Categories: All, Favorites, then the playlist's groups
+        if (vm.channels.isNotEmpty()) {
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                item { Pill("All", vm.selectedGroup == null) { vm.selectedGroup = null } }
-                items(groups) { g -> Pill(g, vm.selectedGroup == g) { vm.selectedGroup = g } }
+                item {
+                    Pill("All", !vm.showFavorites && vm.selectedGroup == null) {
+                        vm.showFavorites = false
+                        vm.selectedGroup = null
+                    }
+                }
+                item {
+                    Pill("Favorites", vm.showFavorites) {
+                        vm.showFavorites = true
+                        vm.selectedGroup = null
+                    }
+                }
+                items(groups) { g ->
+                    Pill(g, !vm.showFavorites && vm.selectedGroup == g) {
+                        vm.showFavorites = false
+                        vm.selectedGroup = g
+                    }
+                }
             }
         }
 
-        when {
-            vm.error != null && vm.channels.isEmpty() -> EmptyState(
-                title = "Couldn't load playlist",
-                body = vm.error.orEmpty()
-            )
-            vm.channels.isEmpty() && !vm.loading -> EmptyState(
-                title = "No channels found",
-                body = "Tap refresh to try again."
-            )
-            vm.showFavorites && favs.isEmpty() -> EmptyState(
-                title = "No favorites yet",
-                body = "Tap the heart on a channel to keep it here."
-            )
-            list.isEmpty() && !vm.loading -> EmptyState(
-                title = "No matches",
-                body = "Try a different name or group."
-            )
-            else -> LazyVerticalGrid(
-                columns = GridCells.Adaptive(104.dp),
-                contentPadding = PaddingValues(10.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                items(list) { c ->
-                    ChannelCard(
-                        c = c,
-                        isFav = c.url in favUrls,
-                        onClick = { vm.openChannel(c) },
-                        onFav = { vm.toggleFavorite(c) }
-                    )
+        Box(Modifier.weight(1f).fillMaxWidth().nestedScroll(pull.nestedScrollConnection)) {
+            when {
+                vm.error != null && vm.channels.isEmpty() -> EmptyState(
+                    title = "Couldn't load playlist",
+                    body = vm.error.orEmpty() + "\nPull down to try again."
+                )
+                vm.channels.isEmpty() && !vm.loading -> EmptyState(
+                    title = "No channels found",
+                    body = "Pull down to refresh."
+                )
+                vm.showFavorites && favs.isEmpty() -> EmptyState(
+                    title = "No favorites yet",
+                    body = "Tap the heart on a channel to keep it here."
+                )
+                list.isEmpty() && !vm.loading -> EmptyState(
+                    title = "No matches",
+                    body = "Try a different name or group."
+                )
+                else -> LazyVerticalGrid(
+                    columns = GridCells.Adaptive(104.dp),
+                    contentPadding = PaddingValues(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(list) { c ->
+                        ChannelCard(
+                            c = c,
+                            isFav = c.url in favUrls,
+                            onClick = { vm.openChannel(c, list) },
+                            onFav = { vm.toggleFavorite(c) }
+                        )
+                    }
                 }
             }
+            PullToRefreshContainer(
+                state = pull,
+                modifier = Modifier.align(Alignment.TopCenter)
+            )
         }
     }
 }
@@ -526,7 +773,7 @@ fun Pill(label: String, selected: Boolean, onClick: () -> Unit) {
 @Composable
 fun EmptyState(title: String, body: String) {
     Column(
-        Modifier.fillMaxSize().padding(32.dp),
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -543,15 +790,129 @@ fun EmptyState(title: String, body: String) {
 
 // ───────────────────────── Player page ─────────────────────────
 
+private val RESIZE_MODES = listOf(
+    AspectRatioFrameLayout.RESIZE_MODE_FIT to "Fit",
+    AspectRatioFrameLayout.RESIZE_MODE_FILL to "Fill",
+    AspectRatioFrameLayout.RESIZE_MODE_ZOOM to "Zoom"
+)
+
+private fun formatTime(ms: Long): String {
+    val total = ms.coerceAtLeast(0L) / 1000
+    val h = total / 3600
+    val m = (total % 3600) / 60
+    val s = total % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
+}
+
+private fun currentBrightness(activity: Activity?): Float {
+    val a = activity ?: return 0.5f
+    val set = a.window.attributes.screenBrightness
+    if (set >= 0f) return set
+    return try {
+        Settings.System.getInt(a.contentResolver, Settings.System.SCREEN_BRIGHTNESS) / 255f
+    } catch (e: Exception) {
+        0.5f
+    }
+}
+
+private fun Player.setCaptions(on: Boolean) {
+    trackSelectionParameters = trackSelectionParameters.buildUpon()
+        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !on)
+        .build()
+}
+
+private fun Player.setMaxQuality(height: Int) {
+    trackSelectionParameters = trackSelectionParameters.buildUpon()
+        .setMaxVideoSize(Int.MAX_VALUE, if (height <= 0) Int.MAX_VALUE else height)
+        .build()
+}
+
+@Composable
+private fun ControlIcon(icon: ImageVector, desc: String, tint: Color = Color.White, onClick: () -> Unit) {
+    Box(
+        Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, contentDescription = desc, tint = tint, modifier = Modifier.size(24.dp))
+    }
+}
+
+@Composable
+private fun SeekButton(icon: ImageVector, seconds: String, desc: String, onClick: () -> Unit) {
+    Box(
+        Modifier.size(56.dp).clip(CircleShape).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, contentDescription = desc, tint = Color.White, modifier = Modifier.size(48.dp))
+        Text(seconds, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun SkipButton(icon: ImageVector, desc: String, onClick: () -> Unit) {
+    Box(
+        Modifier.size(56.dp).clip(CircleShape).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, contentDescription = desc, tint = Color.White, modifier = Modifier.size(40.dp))
+    }
+}
+
 @Composable
 fun PlayerScreen(vm: MainViewModel, inPip: Boolean) {
     val cs = MaterialTheme.colorScheme
     val activity = LocalContext.current as? Activity
     val view = LocalView.current
+    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val favs by vm.favorites.collectAsState()
+    val ctrl = vm.controller
     val c = vm.current
+    val queueIndex = if (c != null) vm.queue.indexOfFirst { it.url == c.url } else -1
+    val hasPrev = queueIndex > 0
+    val hasNext = queueIndex >= 0 && queueIndex < vm.queue.size - 1
+
     var locked by remember { mutableStateOf(false) }
-    var controlsVisible by remember { mutableStateOf(true) }
+    var visible by remember { mutableStateOf(true) }
+    var tick by remember { mutableStateOf(0) }          // restarts the auto-hide timer
+    var pos by remember { mutableStateOf(0L) }
+    var dur by remember { mutableStateOf(0L) }
+    var playing by remember { mutableStateOf(true) }
+    var buffering by remember { mutableStateOf(false) }
+    var muted by remember { mutableStateOf(false) }
+    var ccOn by remember { mutableStateOf(false) }
+    var resize by remember { mutableStateOf(0) }
+    var quality by remember { mutableStateOf(0) }
+    var speed by remember { mutableStateOf(1f) }
+    var showSettings by remember { mutableStateOf(false) }
+    var seeking by remember { mutableStateOf(false) }
+    var seekValue by remember { mutableStateOf(0f) }
+
+    // Swipe up/down: left half = brightness, right half = volume
+    val context = LocalContext.current
+    val audio = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
+    val maxVol = remember { audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1) }
+    var volLevel by remember {
+        mutableStateOf(audio.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / maxVol)
+    }
+    var brightLevel by remember { mutableStateOf(currentBrightness(activity)) }
+    var gesture by remember { mutableStateOf<String?>(null) }
+    var gestureTick by remember { mutableStateOf(0) }
+    LaunchedEffect(gestureTick) {
+        if (gesture != null) {
+            delay(900)
+            gesture = null
+        }
+    }
+
+    // Double-tap seek feedback: -1 = back, 1 = forward
+    var seekFlash by remember { mutableStateOf(0) }
+    var seekFlashTick by remember { mutableStateOf(0) }
+    LaunchedEffect(seekFlashTick) {
+        if (seekFlash != 0) {
+            delay(600)
+            seekFlash = 0
+        }
+    }
 
     // Immersive while watching; restore bars and orientation on exit
     DisposableEffect(Unit) {
@@ -560,25 +921,62 @@ fun PlayerScreen(vm: MainViewModel, inPip: Boolean) {
         insets?.hide(WindowInsetsCompat.Type.systemBars())
         onDispose {
             insets?.show(WindowInsetsCompat.Type.systemBars())
+            activity?.window?.let { w ->
+                val lp = w.attributes
+                lp.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                w.attributes = lp
+            }
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
+    // Each channel starts with captions off; undo our tweaks when leaving
+    LaunchedEffect(ctrl) { ctrl?.setCaptions(false) }
+    DisposableEffect(ctrl) {
+        onDispose {
+            ctrl?.run {
+                volume = 1f
+                setPlaybackSpeed(1f)
+                setMaxQuality(0)
+                setCaptions(true)
+            }
+        }
+    }
+
+    // Poll the player for the seek bar / play state
+    LaunchedEffect(ctrl) {
+        while (true) {
+            ctrl?.let {
+                pos = it.currentPosition.coerceAtLeast(0L)
+                dur = it.duration
+                playing = it.playWhenReady
+                buffering = it.playbackState == Player.STATE_BUFFERING
+            }
+            delay(500)
+        }
+    }
+
+    // Auto-hide the controls while playing
+    LaunchedEffect(visible, tick, playing, showSettings) {
+        if (visible && playing && !showSettings) {
+            delay(4000)
+            visible = false
+        }
+    }
+
+    val toggleOrientation: () -> Unit = {
+        activity?.let { a ->
+            val land = a.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+            a.requestedOrientation =
+                if (land) ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         }
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         VideoSurface(
-            exo = vm.controller,
-            locked = locked,
-            inPip = inPip,
-            onControls = { controlsVisible = it },
-            onFullscreen = {
-                activity?.let { a ->
-                    val landscape =
-                        a.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-                    a.requestedOrientation =
-                        if (landscape) ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
-                        else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                }
-            },
+            exo = ctrl,
+            resizeMode = RESIZE_MODES[resize].first,
             modifier = Modifier.fillMaxSize()
         )
 
@@ -591,78 +989,387 @@ fun PlayerScreen(vm: MainViewModel, inPip: Boolean) {
             )
         }
 
-        if (!inPip && c != null) {
-            if (locked) {
-                IconButton(
-                    onClick = { locked = false },
-                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
-                ) { Icon(Icons.Filled.Lock, contentDescription = "Unlock", tint = cs.primary) }
-            } else if (controlsVisible) {
+        if (!inPip) {
+            // Tap shows/hides the controls; swipe up/down changes brightness (left) or volume (right)
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = {
+                                visible = !visible
+                                tick++
+                            },
+                            onDoubleTap = { offset ->
+                                if (!locked) {
+                                    val back = offset.x < size.width / 2f
+                                    val target = ctrl.currentPosition + if (back) -10_000L else 10_000L
+                                    ctrl.seekTo(target.coerceAtLeast(0L))
+                                    seekFlash = if (back) -1 else 1
+                                    seekFlashTick++
+                                }
+                            }
+                        )
+                    }
+                    .pointerInput(Unit) {
+                        var onLeft = false
+                        detectVerticalDragGestures(
+                            onDragStart = { offset ->
+                                onLeft = offset.x < size.width / 2f
+                                volLevel = audio.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / maxVol
+                            },
+                            onVerticalDrag = { change, dy ->
+                                if (!locked) {
+                                    change.consume()
+                                    val delta = -dy / (size.height * 0.6f)
+                                    if (onLeft) {
+                                        brightLevel = (brightLevel + delta).coerceIn(0.02f, 1f)
+                                        activity?.window?.let { w ->
+                                            val lp = w.attributes
+                                            lp.screenBrightness = brightLevel
+                                            w.attributes = lp
+                                        }
+                                        gesture = "brightness"
+                                    } else {
+                                        volLevel = (volLevel + delta).coerceIn(0f, 1f)
+                                        audio.setStreamVolume(
+                                            AudioManager.STREAM_MUSIC,
+                                            (volLevel * maxVol).roundToInt(),
+                                            0
+                                        )
+                                        gesture = "volume"
+                                    }
+                                    gestureTick++
+                                }
+                            }
+                        )
+                    }
+            )
+
+            gesture?.let { g ->
+                val level = if (g == "volume") volLevel else brightLevel
                 Row(
                     Modifier
-                        .align(Alignment.TopStart)
-                        .fillMaxWidth()
-                        .background(Brush.verticalGradient(listOf(Color(0xCC000000), Color.Transparent)))
-                        .padding(horizontal = 4.dp, vertical = 8.dp),
+                        .align(Alignment.TopCenter)
+                        .padding(top = 80.dp)
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(Color(0xCC000000))
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(onClick = { vm.closePlayer() }) {
-                        Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
+                    Icon(
+                        if (g == "volume") {
+                            if (level <= 0f) PlayerIcons.VolumeOff else PlayerIcons.VolumeUp
+                        } else {
+                            PlayerIcons.Brightness
+                        },
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    LinearProgressIndicator(
+                        progress = { level },
+                        modifier = Modifier.width(110.dp),
+                        color = cs.primary,
+                        trackColor = Color(0x44FFFFFF)
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        "${(level * 100).roundToInt()}%",
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            if (seekFlash != 0) {
+                Box(
+                    Modifier
+                        .align(if (seekFlash < 0) Alignment.CenterStart else Alignment.CenterEnd)
+                        .padding(horizontal = 56.dp)
+                        .size(84.dp)
+                        .clip(CircleShape)
+                        .background(Color(0x66000000)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        if (seekFlash < 0) PlayerIcons.Replay else PlayerIcons.Forward,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(56.dp)
+                    )
+                    Text("10", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            val controlsShown = visible && !locked && c != null
+            if (buffering && !controlsShown) {
+                CircularProgressIndicator(
+                    Modifier.align(Alignment.Center).size(48.dp),
+                    color = cs.primary
+                )
+            }
+
+            if (visible && c != null) {
+                if (locked) {
+                    IconButton(
+                        onClick = {
+                            locked = false
+                            tick++
+                        },
+                        modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
+                    ) { Icon(Icons.Filled.Lock, contentDescription = "Unlock", tint = cs.primary) }
+                } else {
+                    Box(Modifier.fillMaxSize().background(Color(0x55000000)))
+
+                    // Top bar: close, title, favorite, lock
+                    Row(
+                        Modifier
+                            .align(Alignment.TopStart)
+                            .fillMaxWidth()
+                            .background(Brush.verticalGradient(listOf(Color(0xCC000000), Color.Transparent)))
+                            .padding(horizontal = 4.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = { vm.closePlayer() }) {
+                            Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
+                        }
+                        Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
+                            Text(
+                                c!!.name,
+                                color = Color.White,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(Modifier.height(3.dp))
+                            LiveBadge()
+                        }
+                        val isFav = favs.any { it.url == c.url }
+                        IconButton(onClick = { vm.toggleFavorite(c) }) {
+                            Icon(
+                                if (isFav) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                                contentDescription = "Favorite",
+                                tint = if (isFav) HeartPink else Color.White
+                            )
+                        }
+                        IconButton(onClick = {
+                            locked = true
+                            tick++
+                        }) {
+                            Icon(Icons.Filled.Lock, contentDescription = "Lock controls", tint = Color.White)
+                        }
                     }
-                    Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
-                        Text(
-                            c.name,
-                            color = Color.White,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Spacer(Modifier.height(3.dp))
-                        LiveBadge()
+
+                    // Center: back 5s, play/pause, forward 15s
+                    Row(
+                        Modifier.align(Alignment.Center),
+                        horizontalArrangement = Arrangement.spacedBy(40.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (hasPrev) {
+                            SkipButton(PlayerIcons.SkipPrevious, "Previous channel") {
+                                vm.playPrevious()
+                                tick++
+                            }
+                        } else {
+                            Spacer(Modifier.size(56.dp))
+                        }
+                        Box(Modifier.size(72.dp), contentAlignment = Alignment.Center) {
+                            if (buffering) {
+                                CircularProgressIndicator(Modifier.size(48.dp), color = cs.primary)
+                            } else {
+                                IconButton(
+                                    onClick = {
+                                        ctrl?.let { if (it.playWhenReady) it.pause() else it.play() }
+                                        tick++
+                                    },
+                                    modifier = Modifier.size(72.dp)
+                                ) {
+                                    Icon(
+                                        if (playing) PlayerIcons.Pause else Icons.Filled.PlayArrow,
+                                        contentDescription = if (playing) "Pause" else "Play",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(56.dp)
+                                    )
+                                }
+                            }
+                        }
+                        if (hasNext) {
+                            SkipButton(PlayerIcons.SkipNext, "Next channel") {
+                                vm.playNext()
+                                tick++
+                            }
+                        } else {
+                            Spacer(Modifier.size(56.dp))
+                        }
                     }
-                    val isFav = favs.any { it.url == c.url }
-                    IconButton(onClick = { vm.toggleFavorite(c) }) {
-                        Icon(
-                            if (isFav) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                            contentDescription = "Favorite",
-                            tint = if (isFav) HeartPink else Color.White
-                        )
-                    }
-                    IconButton(onClick = { locked = true }) {
-                        Icon(Icons.Filled.Lock, contentDescription = "Lock controls", tint = Color.White)
+
+                    // Bottom: seek bar and tool row
+                    Column(
+                        Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xCC000000))))
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        val shown = if (seeking) seekValue else pos.toFloat()
+                        if (dur > 0) {
+                            Slider(
+                                value = shown.coerceIn(0f, dur.toFloat()),
+                                onValueChange = {
+                                    seeking = true
+                                    seekValue = it
+                                    tick++
+                                },
+                                onValueChangeFinished = {
+                                    ctrl?.seekTo(seekValue.toLong())
+                                    seeking = false
+                                    tick++
+                                },
+                                valueRange = 0f..dur.toFloat(),
+                                colors = SliderDefaults.colors(
+                                    thumbColor = Color.White,
+                                    activeTrackColor = Color.White,
+                                    inactiveTrackColor = Color(0x66FFFFFF)
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (dur > 0) {
+                                Text(
+                                    "-${formatTime(dur - shown.toLong())}  ·  ${formatTime(dur)}",
+                                    color = Color.White,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            } else {
+                                LiveBadge()
+                            }
+                            Spacer(Modifier.weight(1f))
+                            Text(
+                                RESIZE_MODES[resize].second,
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        resize = (resize + 1) % RESIZE_MODES.size
+                                        tick++
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 8.dp)
+                            )
+                            Box(
+                                Modifier
+                                    .padding(horizontal = 4.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .border(
+                                        1.5.dp,
+                                        if (ccOn) cs.primary else Color.White,
+                                        RoundedCornerShape(6.dp)
+                                    )
+                                    .clickable {
+                                        ccOn = !ccOn
+                                        ctrl?.setCaptions(ccOn)
+                                        tick++
+                                    }
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    "CC",
+                                    color = if (ccOn) cs.primary else Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            ControlIcon(Icons.Filled.Settings, "Playback settings") {
+                                showSettings = true
+                            }
+                            ControlIcon(
+                                if (muted) PlayerIcons.VolumeOff else PlayerIcons.VolumeUp,
+                                if (muted) "Unmute" else "Mute"
+                            ) {
+                                muted = !muted
+                                ctrl?.volume = if (muted) 0f else 1f
+                                tick++
+                            }
+                            ControlIcon(
+                                if (landscape) PlayerIcons.FullscreenExit else PlayerIcons.Fullscreen,
+                                if (landscape) "Exit fullscreen" else "Fullscreen"
+                            ) {
+                                toggleOrientation()
+                                tick++
+                            }
+                        }
                     }
                 }
             }
         }
     }
+
+    if (showSettings) {
+        AlertDialog(
+            onDismissRequest = {
+                showSettings = false
+                tick++
+            },
+            containerColor = cs.surface,
+            title = { Text("Playback settings") },
+            text = {
+                Column {
+                    Text("Quality", style = MaterialTheme.typography.labelLarge, color = cs.onSurfaceVariant)
+                    Spacer(Modifier.height(6.dp))
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(listOf(0, 1080, 720, 480, 360)) { h ->
+                            Pill(if (h == 0) "Auto" else "${h}p", quality == h) {
+                                quality = h
+                                ctrl?.setMaxQuality(h)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(16.dp))
+                    Text("Speed", style = MaterialTheme.typography.labelLarge, color = cs.onSurfaceVariant)
+                    Spacer(Modifier.height(6.dp))
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(listOf(0.5f, 1f, 1.25f, 1.5f, 2f)) { s ->
+                            val label = if (s % 1f == 0f) "${s.toInt()}x" else "${s}x"
+                            Pill(label, speed == s) {
+                                speed = s
+                                ctrl?.setPlaybackSpeed(s)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showSettings = false
+                    tick++
+                }) { Text("Done") }
+            }
+        )
+    }
 }
 
 @Composable
-fun VideoSurface(
-    exo: Player?,
-    locked: Boolean,
-    inPip: Boolean,
-    onControls: (Boolean) -> Unit,
-    onFullscreen: () -> Unit,
-    modifier: Modifier
-) {
+fun VideoSurface(exo: Player?, resizeMode: Int, modifier: Modifier) {
     AndroidView(
         factory = { ctx ->
             PlayerView(ctx).apply {
                 player = exo
+                useController = false
                 keepScreenOn = true
-                controllerShowTimeoutMs = 3500
-                setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
-                setControllerVisibilityListener(
-                    PlayerView.ControllerVisibilityListener { v -> onControls(v == View.VISIBLE) }
-                )
-                setFullscreenButtonClickListener { _ -> onFullscreen() }
+                setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
             }
         },
         update = {
             it.player = exo
-            it.useController = !locked && !inPip
+            it.resizeMode = resizeMode
         },
         onRelease = { it.player = null },
         modifier = modifier

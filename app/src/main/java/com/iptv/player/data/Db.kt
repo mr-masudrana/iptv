@@ -29,7 +29,8 @@ data class PlaylistEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
     val source: String,   // http(s) URL or content:// URI
-    val isFile: Boolean
+    val isFile: Boolean,
+    val position: Int = 0
 )
 
 @Dao
@@ -46,14 +47,20 @@ interface FavoriteDao {
 
 @Dao
 interface PlaylistDao {
-    @Query("SELECT * FROM playlists ORDER BY id")
+    @Query("SELECT * FROM playlists ORDER BY position, id")
     fun all(): Flow<List<PlaylistEntity>>
 
-    @Query("SELECT * FROM playlists ORDER BY id")
+    @Query("SELECT * FROM playlists ORDER BY position, id")
     suspend fun allOnce(): List<PlaylistEntity>
 
     @Insert
     suspend fun insert(p: PlaylistEntity): Long
+
+    @Query("SELECT MAX(position) FROM playlists")
+    suspend fun maxPosition(): Int?
+
+    @Update
+    suspend fun updateAll(items: List<PlaylistEntity>)
 
     @Update
     suspend fun update(p: PlaylistEntity)
@@ -72,7 +79,14 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
     }
 }
 
-@Database(entities = [FavoriteEntity::class, PlaylistEntity::class], version = 2, exportSchema = false)
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `playlists` ADD COLUMN `position` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("UPDATE `playlists` SET `position` = `id`")
+    }
+}
+
+@Database(entities = [FavoriteEntity::class, PlaylistEntity::class], version = 3, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun favoriteDao(): FavoriteDao
     abstract fun playlistDao(): PlaylistDao
@@ -83,7 +97,7 @@ abstract class AppDatabase : RoomDatabase() {
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
                 context.applicationContext, AppDatabase::class.java, "iptv.db"
-            ).addMigrations(MIGRATION_1_2).build().also { instance = it }
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
         }
     }
 }
