@@ -2,6 +2,8 @@ package com.iptv.player
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.media.AudioManager
 import android.provider.Settings
 import android.view.WindowManager
@@ -33,6 +35,8 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -49,6 +53,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -97,6 +102,8 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -110,6 +117,8 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.Player
 import androidx.media3.common.C
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.AspectRatioFrameLayout
 import coil.compose.AsyncImage
@@ -118,37 +127,52 @@ import com.iptv.player.data.Channel
 import com.iptv.player.data.PlaylistEntity
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.delay
+import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
 // ───────────────────────── Root: Playlist → Channels → Player ─────────────────────────
 
 @Composable
-fun AppRoot(vm: MainViewModel, inPip: Boolean, onEnterPip: () -> Boolean) {
-    // Back on the player: float the video (picture-in-picture); if that is not possible, close it
-    BackHandler(enabled = vm.screen == 2) {
-        if (!onEnterPip()) vm.closePlayer()
-    }
+fun AppRoot(vm: MainViewModel) {
+    // Back on the channels page returns to the playlists; on the playlists it leaves the app
     BackHandler(enabled = vm.screen == 1) { vm.closeChannels() }
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         when (vm.screen) {
-            2 -> PlayerScreen(vm, inPip)
             1 -> ChannelsScreen(vm)
             else -> PlaylistScreen(vm)
         }
     }
 }
 
+/** The video page lives in its own activity so it can float (PiP) over these pages. */
+private fun openPlayer(context: Context) {
+    context.startActivity(Intent(context, PlayerActivity::class.java))
+}
+
+private fun openChannel(context: Context, c: Channel, list: List<Channel>) {
+    PlayerManager.play(c, list)
+    openPlayer(context)
+}
+
+private fun playStream(context: Context, url: String) {
+    val u = url.trim()
+    if (u.isEmpty()) return
+    PlayerManager.play(Channel(Uri.parse(u).host ?: "Stream", u, null, ""))
+    openPlayer(context)
+}
+
 // ───────────────────────── Playlist page ─────────────────────────
 
 @Composable
 fun PlaylistScreen(vm: MainViewModel) {
+    val context = LocalContext.current
     val playlists by vm.playlists.collectAsState()
     val list = playlists.orEmpty()
     var menu by remember { mutableStateOf(false) }
     var showAdd by remember { mutableStateOf(false) }
-    var showStream by remember { mutableStateOf(false) }
+    var streamUrl by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf<PlaylistEntity?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.importFile(uri)
@@ -188,15 +212,33 @@ fun PlaylistScreen(vm: MainViewModel) {
                             picker.launch(arrayOf("*/*"))
                         }
                     )
-                    DropdownMenuItem(
-                        text = { Text("Stream URL") },
-                        onClick = {
-                            menu = false
-                            showStream = true
-                        }
-                    )
                 }
             }
+        }
+
+        // Single stream link: paste an .m3u8 (or any stream) link and press Play
+        val canPlay = streamUrl.trim().startsWith("http", ignoreCase = true)
+        Row(
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = streamUrl,
+                onValueChange = { streamUrl = it },
+                placeholder = { Text("Paste stream link (.m3u8)") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
+                keyboardActions = KeyboardActions(onGo = { if (canPlay) playStream(context, streamUrl) }),
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(8.dp))
+            Button(
+                onClick = { playStream(context, streamUrl) },
+                enabled = canPlay,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.height(56.dp)
+            ) { Text("Play") }
         }
 
         if (list.isEmpty() && playlists != null) {
@@ -215,15 +257,6 @@ fun PlaylistScreen(vm: MainViewModel) {
             onAdd = { name, url ->
                 vm.addPlaylistUrl(name, url)
                 showAdd = false
-            }
-        )
-    }
-    if (showStream) {
-        StreamUrlDialog(
-            onDismiss = { showStream = false },
-            onPlay = { url ->
-                showStream = false
-                vm.playStream(url)
             }
         )
     }
@@ -459,34 +492,6 @@ fun AddUrlDialog(onDismiss: () -> Unit, onAdd: (name: String, url: String) -> Un
 }
 
 @Composable
-fun StreamUrlDialog(onDismiss: () -> Unit, onPlay: (url: String) -> Unit) {
-    var url by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surface,
-        title = { Text("Stream URL") },
-        text = {
-            OutlinedTextField(
-                value = url,
-                onValueChange = { url = it },
-                label = { Text("Stream link (.m3u8)") },
-                placeholder = { Text("https://") },
-                maxLines = 3,
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier.fillMaxWidth()
-            )
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onPlay(url) },
-                enabled = url.trim().startsWith("http", ignoreCase = true)
-            ) { Text("Play") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
-}
-
-@Composable
 fun EditPlaylistDialog(
     p: PlaylistEntity,
     onDismiss: () -> Unit,
@@ -538,6 +543,7 @@ fun EditPlaylistDialog(
 @Composable
 fun ChannelsScreen(vm: MainViewModel) {
     val cs = MaterialTheme.colorScheme
+    val context = LocalContext.current
     val favs by vm.favorites.collectAsState()
     val favUrls = remember(favs) { favs.map { it.url }.toSet() }
     var searching by remember { mutableStateOf(false) }
@@ -661,7 +667,7 @@ fun ChannelsScreen(vm: MainViewModel) {
                         ChannelCard(
                             c = c,
                             isFav = c.url in favUrls,
-                            onClick = { vm.openChannel(c, list) },
+                            onClick = { openChannel(context, c, list) },
                             onFav = { vm.toggleFavorite(c) }
                         )
                     }
@@ -898,9 +904,91 @@ private fun Player.setCaptions(on: Boolean) {
         .build()
 }
 
-private fun Player.setMaxQuality(height: Int) {
+private data class AudioOption(
+    val group: Tracks.Group,
+    val index: Int,
+    val label: String,
+    val selected: Boolean
+)
+
+/** Distinct video heights (e.g. 1080, 720, 480) the stream offers, best first. */
+private fun videoHeights(tracks: Tracks): List<Int> {
+    val heights = mutableSetOf<Int>()
+    for (g in tracks.groups) {
+        if (g.type != C.TRACK_TYPE_VIDEO) continue
+        for (i in 0 until g.length) {
+            val h = g.getTrackFormat(i).height
+            if (g.isTrackSupported(i) && h > 0) heights.add(h)
+        }
+    }
+    return heights.sortedDescending()
+}
+
+/** Every selectable audio track (dual audio, several languages). */
+private fun audioOptions(tracks: Tracks): List<AudioOption> {
+    val raw = mutableListOf<AudioOption>()
+    for (g in tracks.groups) {
+        if (g.type != C.TRACK_TYPE_AUDIO) continue
+        for (i in 0 until g.length) {
+            if (!g.isTrackSupported(i)) continue
+            val f = g.getTrackFormat(i)
+            val name = f.label
+                ?: f.language
+                    ?.takeIf { it.isNotBlank() && it != "und" }
+                    ?.let { Locale(it).displayLanguage.replaceFirstChar { ch -> ch.uppercase() } }
+                ?: ""
+            raw.add(AudioOption(g, i, name, g.isTrackSelected(i)))
+        }
+    }
+    // Readable, unique labels
+    return raw.mapIndexed { n, o ->
+        val same = raw.count { it.label == o.label }
+        val label = when {
+            o.label.isBlank() -> "Audio ${n + 1}"
+            same > 1 -> "${o.label} ${raw.take(n + 1).count { it.label == o.label }}"
+            else -> o.label
+        }
+        o.copy(label = label)
+    }
+}
+
+/** height <= 0 = automatic; otherwise lock playback to the best track of that height. */
+private fun Player.selectVideoHeight(height: Int) {
+    val builder = trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+    if (height > 0) {
+        var bestGroup: Tracks.Group? = null
+        var bestIndex = -1
+        var bestBitrate = Int.MIN_VALUE
+        for (g in currentTracks.groups) {
+            if (g.type != C.TRACK_TYPE_VIDEO) continue
+            for (i in 0 until g.length) {
+                val f = g.getTrackFormat(i)
+                if (g.isTrackSupported(i) && f.height == height && f.bitrate > bestBitrate) {
+                    bestGroup = g
+                    bestIndex = i
+                    bestBitrate = f.bitrate
+                }
+            }
+        }
+        val chosen = bestGroup
+        if (chosen != null) {
+            builder.setOverrideForType(TrackSelectionOverride(chosen.mediaTrackGroup, bestIndex))
+        }
+    }
+    trackSelectionParameters = builder.build()
+}
+
+private fun Player.selectAudio(option: AudioOption) {
     trackSelectionParameters = trackSelectionParameters.buildUpon()
-        .setMaxVideoSize(Int.MAX_VALUE, if (height <= 0) Int.MAX_VALUE else height)
+        .setOverrideForType(TrackSelectionOverride(option.group.mediaTrackGroup, option.index))
+        .build()
+}
+
+private fun Player.resetTrackChoices() {
+    trackSelectionParameters = trackSelectionParameters.buildUpon()
+        .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+        .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+        .setMaxVideoSize(Int.MAX_VALUE, Int.MAX_VALUE)
         .build()
 }
 
@@ -936,17 +1024,17 @@ private fun SkipButton(icon: ImageVector, desc: String, onClick: () -> Unit) {
 }
 
 @Composable
-fun PlayerScreen(vm: MainViewModel, inPip: Boolean) {
+fun PlayerScreen(vm: MainViewModel, inPip: Boolean, onClose: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val activity = LocalContext.current as? Activity
     val view = LocalView.current
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val favs by vm.favorites.collectAsState()
-    val ctrl = vm.controller
-    val c = vm.current
-    val queueIndex = if (c != null) vm.queue.indexOfFirst { it.url == c.url } else -1
+    val ctrl = PlayerManager.player
+    val c = PlayerManager.current
+    val queueIndex = if (c != null) PlayerManager.queue.indexOfFirst { it.url == c.url } else -1
     val hasPrev = queueIndex > 0
-    val hasNext = queueIndex >= 0 && queueIndex < vm.queue.size - 1
+    val hasNext = queueIndex >= 0 && queueIndex < PlayerManager.queue.size - 1
 
     var locked by remember { mutableStateOf(false) }
     var visible by remember { mutableStateOf(true) }
@@ -1009,12 +1097,32 @@ fun PlayerScreen(vm: MainViewModel, inPip: Boolean) {
 
     // Each channel starts with captions off; undo our tweaks when leaving
     LaunchedEffect(ctrl) { ctrl?.setCaptions(false) }
+
+    // Video qualities / audio tracks that the current channel really offers
+    var tracks by remember { mutableStateOf(ctrl.currentTracks) }
+    DisposableEffect(ctrl) {
+        val listener = object : Player.Listener {
+            override fun onTracksChanged(newTracks: Tracks) {
+                tracks = newTracks
+            }
+        }
+        ctrl.addListener(listener)
+        onDispose { ctrl.removeListener(listener) }
+    }
+    val heights = remember(tracks) { videoHeights(tracks) }
+    val audioOpts = remember(tracks) { audioOptions(tracks) }
+
+    // Every channel starts on automatic quality and its default audio
+    LaunchedEffect(c?.url) {
+        quality = 0
+        ctrl.resetTrackChoices()
+    }
     DisposableEffect(ctrl) {
         onDispose {
             ctrl?.run {
                 volume = 1f
                 setPlaybackSpeed(1f)
-                setMaxQuality(0)
+                resetTrackChoices()
                 setCaptions(true)
             }
         }
@@ -1057,7 +1165,7 @@ fun PlayerScreen(vm: MainViewModel, inPip: Boolean) {
             modifier = Modifier.fillMaxSize()
         )
 
-        vm.playerError?.let {
+        PlayerManager.playerError?.let {
             Text(
                 it,
                 color = Color.White,
@@ -1210,7 +1318,7 @@ fun PlayerScreen(vm: MainViewModel, inPip: Boolean) {
                             .padding(horizontal = 4.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = { vm.closePlayer() }) {
+                        IconButton(onClick = { onClose() }) {
                             Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
                         }
                         Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
@@ -1249,7 +1357,7 @@ fun PlayerScreen(vm: MainViewModel, inPip: Boolean) {
                     ) {
                         if (hasPrev) {
                             SkipButton(PlayerIcons.SkipPrevious, "Previous channel") {
-                                vm.playPrevious()
+                                PlayerManager.playPrevious()
                                 tick++
                             }
                         } else {
@@ -1277,7 +1385,7 @@ fun PlayerScreen(vm: MainViewModel, inPip: Boolean) {
                         }
                         if (hasNext) {
                             SkipButton(PlayerIcons.SkipNext, "Next channel") {
-                                vm.playNext()
+                                PlayerManager.playNext()
                                 tick++
                             }
                         } else {
@@ -1399,17 +1507,29 @@ fun PlayerScreen(vm: MainViewModel, inPip: Boolean) {
             title = { Text("Playback settings") },
             text = {
                 Column {
-                    Text("Quality", style = MaterialTheme.typography.labelLarge, color = cs.onSurfaceVariant)
-                    Spacer(Modifier.height(6.dp))
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(listOf(0, 1080, 720, 480, 360)) { h ->
-                            Pill(if (h == 0) "Auto" else "${h}p", quality == h) {
-                                quality = h
-                                ctrl?.setMaxQuality(h)
+                    if (heights.size > 1) {
+                        Text("Quality", style = MaterialTheme.typography.labelLarge, color = cs.onSurfaceVariant)
+                        Spacer(Modifier.height(6.dp))
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(listOf(0) + heights) { h ->
+                                Pill(if (h == 0) "Auto" else "${h}p", quality == h) {
+                                    quality = h
+                                    ctrl.selectVideoHeight(h)
+                                }
                             }
                         }
+                        Spacer(Modifier.height(16.dp))
                     }
-                    Spacer(Modifier.height(16.dp))
+                    if (audioOpts.size > 1) {
+                        Text("Audio", style = MaterialTheme.typography.labelLarge, color = cs.onSurfaceVariant)
+                        Spacer(Modifier.height(6.dp))
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(audioOpts) { o ->
+                                Pill(o.label, o.selected) { ctrl.selectAudio(o) }
+                            }
+                        }
+                        Spacer(Modifier.height(16.dp))
+                    }
                     Text("Speed", style = MaterialTheme.typography.labelLarge, color = cs.onSurfaceVariant)
                     Spacer(Modifier.height(6.dp))
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -9,12 +9,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.media3.common.AudioAttributes
-import androidx.media3.common.C
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
 import com.iptv.player.data.AppDatabase
 import com.iptv.player.data.Channel
 import com.iptv.player.data.FavoriteEntity
@@ -43,7 +37,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         .build()
 
     // ---- UI state ----
-    var screen by mutableStateOf(0) // 0 = playlists, 1 = channels, 2 = player
+    var screen by mutableStateOf(0) // 0 = playlists, 1 = channels
     var activePlaylist by mutableStateOf<PlaylistEntity?>(null)
     var channels by mutableStateOf(emptyList<Channel>())
     var loading by mutableStateOf(false)
@@ -51,19 +45,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var query by mutableStateOf("")
     var selectedGroup by mutableStateOf<String?>(null)
     var showFavorites by mutableStateOf(false)
-    var current by mutableStateOf<Channel?>(null)
-    var playerError by mutableStateOf<String?>(null)
-    var queue by mutableStateOf(emptyList<Channel>()) // channels next/previous step through
-
-    private var playerBackScreen = 1 // where the player's close button returns to
-    private var resumeOnStart = false
-
-    // The player lives and dies with the app screen: no background playback.
-    val controller: ExoPlayer = ExoPlayer.Builder(app)
-        .setAudioAttributes(AudioAttributes.DEFAULT, true)
-        .setHandleAudioBecomingNoisy(true)
-        .setWakeMode(C.WAKE_MODE_NETWORK)
-        .build()
 
     val favorites: StateFlow<List<Channel>> = favDao.all()
         .map { list -> list.map { Channel(it.name, it.url, it.logo, it.groupName) } }
@@ -71,36 +52,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     val playlists: StateFlow<List<PlaylistEntity>?> = playlistDao.all()
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-
-    init {
-        controller.addListener(object : Player.Listener {
-            override fun onPlayerError(error: PlaybackException) {
-                playerError = "Playback error: ${error.errorCodeName}"
-            }
-
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_READY) playerError = null
-            }
-        })
-    }
-
-    // ---- App lifecycle (called by MainActivity) ----
-
-    /** App left the screen (and is not in picture-in-picture): stop playing. */
-    fun onAppStopped() {
-        resumeOnStart = screen == 2 && controller.playWhenReady
-        controller.pause()
-    }
-
-    /** App is visible again: pick the stream up at the live edge. */
-    fun onAppStarted() {
-        if (resumeOnStart) {
-            resumeOnStart = false
-            controller.seekToDefaultPosition()
-            controller.prepare()
-            controller.play()
-        }
-    }
 
     // ---- Playlist list (home page) ----
 
@@ -214,62 +165,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             M3uParser.parse(text)
         }
 
-    // ---- Player page ----
-
-    /** [list] is the list the channel was picked from (respects group, favorites and search). */
-    fun openChannel(c: Channel, list: List<Channel> = listOf(c)) {
-        playerBackScreen = 1
-        queue = list
-        play(c)
-        screen = 2
-    }
-
-    fun playNext() = step(+1)
-
-    fun playPrevious() = step(-1)
-
-    private fun step(delta: Int) {
-        val idx = queue.indexOfFirst { it.url == current?.url }
-        if (idx < 0) return
-        queue.getOrNull(idx + delta)?.let { play(it) }
-    }
-
-    /** Play a single stream link (e.g. one .m3u8) straight from the home page. */
-    fun playStream(url: String) {
-        val u = url.trim()
-        if (u.isEmpty()) return
-        playerBackScreen = 0
-        queue = emptyList()
-        play(Channel(Uri.parse(u).host ?: "Stream", u, null, ""))
-        screen = 2
-    }
-
-    fun closePlayer() {
-        resumeOnStart = false
-        controller.stop()
-        controller.clearMediaItems()
-        current = null
-        queue = emptyList()
-        playerError = null
-        screen = playerBackScreen
-    }
-
-    private fun play(c: Channel) {
-        current = c
-        playerError = null
-        controller.setMediaItem(MediaItem.fromUri(c.url))
-        controller.prepare()
-        controller.play()
-    }
-
     fun toggleFavorite(c: Channel) {
         viewModelScope.launch {
             if (favorites.value.any { it.url == c.url }) favDao.delete(c.url)
             else favDao.insert(FavoriteEntity(c.url, c.name, c.logo, c.group))
         }
-    }
-
-    override fun onCleared() {
-        controller.release()
     }
 }
