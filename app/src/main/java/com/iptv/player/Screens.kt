@@ -18,7 +18,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -56,13 +58,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.PullToRefreshContainer
-import androidx.compose.material3.rememberPullToRefreshState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -85,9 +85,13 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -97,6 +101,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -530,7 +535,6 @@ fun EditPlaylistDialog(
 
 // ───────────────────────── Channels page ─────────────────────────
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChannelsScreen(vm: MainViewModel) {
     val cs = MaterialTheme.colorScheme
@@ -543,16 +547,6 @@ fun ChannelsScreen(vm: MainViewModel) {
     BackHandler(enabled = searching) {
         searching = false
         vm.query = ""
-    }
-
-    // Pull down to refresh
-    val pull = rememberPullToRefreshState()
-    LaunchedEffect(pull.isRefreshing) {
-        if (pull.isRefreshing) {
-            vm.refresh()
-            snapshotFlow { vm.loading }.first { !it }
-            pull.endRefresh()
-        }
     }
 
     val groups = remember(vm.channels) { vm.channels.map { it.group }.distinct().sorted() }
@@ -607,10 +601,6 @@ fun ChannelsScreen(vm: MainViewModel) {
             }
         }
 
-        if (vm.loading && !pull.isRefreshing) {
-            LinearProgressIndicator(Modifier.fillMaxWidth(), color = cs.primary)
-        }
-
         // Categories: All, Favorites, then the playlist's groups
         if (vm.channels.isNotEmpty()) {
             LazyRow(
@@ -638,7 +628,11 @@ fun ChannelsScreen(vm: MainViewModel) {
             }
         }
 
-        Box(Modifier.weight(1f).fillMaxWidth().nestedScroll(pull.nestedScrollConnection)) {
+        PullRefreshBox(
+            refreshing = vm.loading,
+            onRefresh = { vm.refresh() },
+            modifier = Modifier.weight(1f).fillMaxWidth()
+        ) {
             when {
                 vm.error != null && vm.channels.isEmpty() -> EmptyState(
                     title = "Couldn't load playlist",
@@ -673,10 +667,93 @@ fun ChannelsScreen(vm: MainViewModel) {
                     }
                 }
             }
-            PullToRefreshContainer(
-                state = pull,
-                modifier = Modifier.align(Alignment.TopCenter)
-            )
+        }
+    }
+}
+
+/** Pull the list down from the top to refresh; shows a small spinner while [refreshing]. */
+@Composable
+fun PullRefreshBox(
+    refreshing: Boolean,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable BoxScope.() -> Unit
+) {
+    val cs = MaterialTheme.colorScheme
+    val density = LocalDensity.current
+    val thresholdPx = with(density) { 72.dp.toPx() }
+    val restPx = with(density) { 56.dp.toPx() }
+    var pull by remember { mutableStateOf(0f) }
+    val isRefreshing by rememberUpdatedState(refreshing)
+    val doRefresh by rememberUpdatedState(onRefresh)
+
+    val connection = remember(thresholdPx) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (pull > 0f && available.y < 0f) {
+                    val used = maxOf(available.y, -pull)
+                    pull += used
+                    return Offset(0f, used)
+                }
+                return Offset.Zero
+            }
+
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset {
+                if (!isRefreshing && source == NestedScrollSource.Drag && available.y > 0f) {
+                    pull = (pull + available.y * 0.5f).coerceAtMost(thresholdPx * 1.6f)
+                    return Offset(0f, available.y)
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (pull >= thresholdPx && !isRefreshing) doRefresh()
+                pull = 0f
+                return Velocity.Zero
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                pull = 0f
+                return Velocity.Zero
+            }
+        }
+    }
+
+    val shown by animateFloatAsState(if (refreshing) restPx else pull, label = "pull")
+
+    Box(modifier.nestedScroll(connection)) {
+        content()
+        if (shown > 1f) {
+            Surface(
+                shape = CircleShape,
+                color = cs.surfaceVariant,
+                shadowElevation = 4.dp,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .size(40.dp)
+                    .graphicsLayer { translationY = shown - size.height }
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    if (refreshing) {
+                        CircularProgressIndicator(
+                            Modifier.size(22.dp),
+                            strokeWidth = 2.5.dp,
+                            color = cs.primary
+                        )
+                    } else {
+                        CircularProgressIndicator(
+                            progress = { (pull / thresholdPx).coerceIn(0f, 1f) },
+                            modifier = Modifier.size(22.dp),
+                            strokeWidth = 2.5.dp,
+                            color = cs.primary
+                        )
+                    }
+                }
+            }
         }
     }
 }
