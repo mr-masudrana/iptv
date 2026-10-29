@@ -1,6 +1,7 @@
 package com.iptv.player
 
 import android.app.Application
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -31,6 +32,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val db = AppDatabase.get(app)
     private val favDao = db.favoriteDao()
     private val playlistDao = db.playlistDao()
+    private val prefs = app.getSharedPreferences("iptv", Context.MODE_PRIVATE)
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
@@ -46,12 +48,35 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var selectedGroup by mutableStateOf<String?>(null)
     var showFavorites by mutableStateOf(false)
 
+    // Single-link plays, newest first
+    var streamHistory by mutableStateOf(loadHistory())
+
     val favorites: StateFlow<List<Channel>> = favDao.all()
         .map { list -> list.map { Channel(it.name, it.url, it.logo, it.groupName) } }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val playlists: StateFlow<List<PlaylistEntity>?> = playlistDao.all()
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    // ---- Stream-link history ----
+
+    private fun loadHistory(): List<String> =
+        prefs.getString("stream_history", "").orEmpty().split("\n").filter { it.isNotBlank() }
+
+    private fun saveHistory(list: List<String>) {
+        streamHistory = list
+        prefs.edit().putString("stream_history", list.joinToString("\n")).apply()
+    }
+
+    fun addStreamHistory(url: String) {
+        val u = url.trim()
+        if (u.isEmpty()) return
+        saveHistory((listOf(u) + streamHistory.filter { it != u }).take(20))
+    }
+
+    fun removeStreamHistory(url: String) = saveHistory(streamHistory.filter { it != url })
+
+    fun clearStreamHistory() = saveHistory(emptyList())
 
     // ---- Playlist list (home page) ----
 

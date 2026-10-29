@@ -58,6 +58,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -172,12 +173,13 @@ fun PlaylistScreen(vm: MainViewModel) {
     val list = playlists.orEmpty()
     var menu by remember { mutableStateOf(false) }
     var showAdd by remember { mutableStateOf(false) }
-    var streamUrl by remember { mutableStateOf("") }
+    var showStream by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<PlaylistEntity?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.importFile(uri)
     }
 
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 20.dp, bottom = 12.dp),
@@ -216,31 +218,6 @@ fun PlaylistScreen(vm: MainViewModel) {
             }
         }
 
-        // Single stream link: paste an .m3u8 (or any stream) link and press Play
-        val canPlay = streamUrl.trim().startsWith("http", ignoreCase = true)
-        Row(
-            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            OutlinedTextField(
-                value = streamUrl,
-                onValueChange = { streamUrl = it },
-                placeholder = { Text("Paste stream link (.m3u8)") },
-                singleLine = true,
-                shape = RoundedCornerShape(14.dp),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
-                keyboardActions = KeyboardActions(onGo = { if (canPlay) playStream(context, streamUrl) }),
-                modifier = Modifier.weight(1f)
-            )
-            Spacer(Modifier.width(8.dp))
-            Button(
-                onClick = { playStream(context, streamUrl) },
-                enabled = canPlay,
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier.height(56.dp)
-            ) { Text("Play") }
-        }
-
         if (list.isEmpty() && playlists != null) {
             EmptyState(
                 title = "No playlists yet",
@@ -249,6 +226,28 @@ fun PlaylistScreen(vm: MainViewModel) {
         } else {
             ReorderablePlaylists(vm, list, onEdit = { editing = it })
         }
+    }
+
+        FloatingActionButton(
+            onClick = { showStream = true },
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
+            modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp)
+        ) { Icon(Icons.Filled.PlayArrow, contentDescription = "Play a stream link") }
+    }
+
+    if (showStream) {
+        StreamDialog(
+            history = vm.streamHistory,
+            onDismiss = { showStream = false },
+            onPlay = { u ->
+                vm.addStreamHistory(u)
+                showStream = false
+                playStream(context, u)
+            },
+            onRemove = { vm.removeStreamHistory(it) },
+            onClear = { vm.clearStreamHistory() }
+        )
     }
 
     if (showAdd) {
@@ -361,7 +360,7 @@ fun ReorderablePlaylists(
     LazyColumn(
         state = listState,
         userScrollEnabled = draggingKey == null,
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier
             .fillMaxSize()
@@ -486,6 +485,89 @@ fun AddUrlDialog(onDismiss: () -> Unit, onAdd: (name: String, url: String) -> Un
                 onClick = { onAdd(name, url) },
                 enabled = url.trim().startsWith("http", ignoreCase = true)
             ) { Text("Add") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
+fun StreamDialog(
+    history: List<String>,
+    onDismiss: () -> Unit,
+    onPlay: (String) -> Unit,
+    onRemove: (String) -> Unit,
+    onClear: () -> Unit
+) {
+    val cs = MaterialTheme.colorScheme
+    var url by remember { mutableStateOf("") }
+    val canPlay = url.trim().startsWith("http", ignoreCase = true)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = cs.surface,
+        title = { Text("Play a stream link") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text("Stream link (.m3u8)") },
+                    placeholder = { Text("https://") },
+                    maxLines = 3,
+                    shape = RoundedCornerShape(14.dp),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Uri,
+                        imeAction = ImeAction.Go
+                    ),
+                    keyboardActions = KeyboardActions(onGo = { if (canPlay) onPlay(url) }),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (history.isNotEmpty()) {
+                    Spacer(Modifier.height(14.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "History",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = cs.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = onClear) { Text("Clear") }
+                    }
+                    LazyColumn(Modifier.heightIn(max = 220.dp)) {
+                        items(history, key = { it }) { h ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { onPlay(h) }
+                                    .padding(start = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    h,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f).padding(vertical = 8.dp)
+                                )
+                                IconButton(
+                                    onClick = { onRemove(h) },
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Close,
+                                        contentDescription = "Remove from history",
+                                        tint = cs.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onPlay(url) }, enabled = canPlay) { Text("Play") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
@@ -1256,7 +1338,7 @@ fun PlayerScreen(vm: MainViewModel, inPip: Boolean, onClose: () -> Unit) {
                     LinearProgressIndicator(
                         progress = { level },
                         modifier = Modifier.width(110.dp),
-                        color = cs.primary,
+                        color = PlayerAccent,
                         trackColor = Color(0x44FFFFFF)
                     )
                     Spacer(Modifier.width(10.dp))
@@ -1293,7 +1375,7 @@ fun PlayerScreen(vm: MainViewModel, inPip: Boolean, onClose: () -> Unit) {
             if (buffering && !controlsShown) {
                 CircularProgressIndicator(
                     Modifier.align(Alignment.Center).size(48.dp),
-                    color = cs.primary
+                    color = PlayerAccent
                 )
             }
 
@@ -1305,7 +1387,7 @@ fun PlayerScreen(vm: MainViewModel, inPip: Boolean, onClose: () -> Unit) {
                             tick++
                         },
                         modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
-                    ) { Icon(Icons.Filled.Lock, contentDescription = "Unlock", tint = cs.primary) }
+                    ) { Icon(Icons.Filled.Lock, contentDescription = "Unlock", tint = PlayerAccent) }
                 } else {
                     Box(Modifier.fillMaxSize().background(Color(0x55000000)))
 
@@ -1365,7 +1447,7 @@ fun PlayerScreen(vm: MainViewModel, inPip: Boolean, onClose: () -> Unit) {
                         }
                         Box(Modifier.size(72.dp), contentAlignment = Alignment.Center) {
                             if (buffering) {
-                                CircularProgressIndicator(Modifier.size(48.dp), color = cs.primary)
+                                CircularProgressIndicator(Modifier.size(48.dp), color = PlayerAccent)
                             } else {
                                 IconButton(
                                     onClick = {
@@ -1455,7 +1537,7 @@ fun PlayerScreen(vm: MainViewModel, inPip: Boolean, onClose: () -> Unit) {
                                     .clip(RoundedCornerShape(6.dp))
                                     .border(
                                         1.5.dp,
-                                        if (ccOn) cs.primary else Color.White,
+                                        if (ccOn) PlayerAccent else Color.White,
                                         RoundedCornerShape(6.dp)
                                     )
                                     .clickable {
@@ -1467,7 +1549,7 @@ fun PlayerScreen(vm: MainViewModel, inPip: Boolean, onClose: () -> Unit) {
                             ) {
                                 Text(
                                     "CC",
-                                    color = if (ccOn) cs.primary else Color.White,
+                                    color = if (ccOn) PlayerAccent else Color.White,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold
                                 )
