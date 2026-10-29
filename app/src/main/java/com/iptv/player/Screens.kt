@@ -16,6 +16,7 @@ import android.view.View
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -97,6 +98,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
@@ -185,6 +187,12 @@ fun PlaylistScreen(vm: MainViewModel) {
             Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 20.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            Image(
+                painter = painterResource(R.drawable.ic_app_logo),
+                contentDescription = null,
+                modifier = Modifier.size(38.dp)
+            )
+            Spacer(Modifier.width(12.dp))
             Text(
                 "IPTV Player",
                 style = MaterialTheme.typography.headlineMedium,
@@ -899,11 +907,10 @@ fun ChannelLogo(c: Channel, modifier: Modifier) {
     var loaded by remember(c.logo) { mutableStateOf(false) }
     Box(modifier, contentAlignment = Alignment.Center) {
         if (!loaded) {
-            Text(
-                c.name.trim().take(1).uppercase().ifEmpty { "?" },
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF0A1020)
+            Image(
+                painter = painterResource(R.drawable.ic_app_logo),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(0.62f)
             )
         }
         if (!c.logo.isNullOrBlank()) {

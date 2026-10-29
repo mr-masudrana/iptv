@@ -3,3 +3,8 @@
 build/
 local.properties
 .idea
+
+# Signing material must never be committed
+*.jks
+*.keystore
+keystore.properties
