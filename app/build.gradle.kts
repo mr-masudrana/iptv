@@ -19,11 +19,11 @@ fun signingValue(env: String, prop: String): String? =
     System.getenv(env)?.takeIf { it.isNotBlank() } ?: keystoreProps.getProperty(prop)
 
 android {
-    namespace = "com.iptv.player"
+    namespace = "com.playerx.app"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.iptv.player"
+        applicationId = "com.playerx.app"
         minSdk = 24
         targetSdk = 34
         // The release workflow passes the tag as -PversionName and the run number as -PversionCode

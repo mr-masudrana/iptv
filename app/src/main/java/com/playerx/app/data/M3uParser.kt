@@ -1,4 +1,4 @@
-package com.iptv.player.data
+package com.playerx.app.data
 
 object M3uParser {
     private val attrRegex = Regex("""([\w-]+)="([^"]*)"""")

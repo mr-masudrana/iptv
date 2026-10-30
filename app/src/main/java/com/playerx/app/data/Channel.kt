@@ -1,4 +1,4 @@
-package com.iptv.player.data
+package com.playerx.app.data
 
 data class Channel(
     val name: String,

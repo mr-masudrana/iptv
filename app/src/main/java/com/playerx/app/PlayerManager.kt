@@ -1,4 +1,4 @@
-package com.iptv.player
+package com.playerx.app
 
 import android.content.Context
 import androidx.compose.runtime.getValue
@@ -10,7 +10,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
-import com.iptv.player.data.Channel
+import com.playerx.app.data.Channel
 
 /**
  * Owns the single ExoPlayer. It is shared by MainActivity (lists) and PlayerActivity (video),

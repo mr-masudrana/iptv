@@ -1,4 +1,4 @@
-package com.iptv.player
+package com.playerx.app
 
 import android.app.Application
 import android.content.Context
@@ -10,11 +10,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.iptv.player.data.AppDatabase
-import com.iptv.player.data.Channel
-import com.iptv.player.data.FavoriteEntity
-import com.iptv.player.data.M3uParser
-import com.iptv.player.data.PlaylistEntity
+import com.playerx.app.data.AppDatabase
+import com.playerx.app.data.Channel
+import com.playerx.app.data.FavoriteEntity
+import com.playerx.app.data.M3uParser
+import com.playerx.app.data.PlaylistEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -32,7 +32,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val db = AppDatabase.get(app)
     private val favDao = db.favoriteDao()
     private val playlistDao = db.playlistDao()
-    private val prefs = app.getSharedPreferences("iptv", Context.MODE_PRIVATE)
+    private val prefs = app.getSharedPreferences("playerx", Context.MODE_PRIVATE)
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)

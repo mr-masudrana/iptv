@@ -1,4 +1,4 @@
-package com.iptv.player.data
+package com.playerx.app.data
 
 import android.content.Context
 import androidx.room.Dao
@@ -96,7 +96,7 @@ abstract class AppDatabase : RoomDatabase() {
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
-                context.applicationContext, AppDatabase::class.java, "iptv.db"
+                context.applicationContext, AppDatabase::class.java, "playerx.db"
             ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
         }
     }

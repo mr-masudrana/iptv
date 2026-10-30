@@ -1,4 +1,4 @@
-package com.iptv.player
+package com.playerx.app
 
 import android.app.Activity
 import android.content.Context
@@ -42,12 +42,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
@@ -126,8 +126,8 @@ import androidx.media3.ui.PlayerView
 import androidx.media3.ui.AspectRatioFrameLayout
 import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
-import com.iptv.player.data.Channel
-import com.iptv.player.data.PlaylistEntity
+import com.playerx.app.data.Channel
+import com.playerx.app.data.PlaylistEntity
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.delay
 import java.util.Locale
@@ -194,14 +194,14 @@ fun PlaylistScreen(vm: MainViewModel) {
             )
             Spacer(Modifier.width(12.dp))
             Text(
-                "IPTV Player",
+                "PlayerX",
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f)
             )
             Box {
                 IconButton(onClick = { menu = true }) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = "Menu")
+                    Icon(Icons.Filled.Add, contentDescription = "Add playlist")
                 }
                 DropdownMenu(
                     expanded = menu,

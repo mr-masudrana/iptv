@@ -1,4 +1,4 @@
-package com.iptv.player
+package com.playerx.app
 
 import android.app.PictureInPictureParams
 import android.os.Build
@@ -43,7 +43,7 @@ class PlayerActivity : ComponentActivity() {
         }
 
         setContent {
-            IptvTheme {
+            PlayerXTheme {
                 Surface(Modifier.fillMaxSize(), color = Color.Black) {
                     PlayerScreen(vm, inPip, onClose = { closePlayer() })
                 }

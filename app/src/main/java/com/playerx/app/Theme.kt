@@ -1,4 +1,4 @@
-package com.iptv.player
+package com.playerx.app
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
@@ -30,6 +30,6 @@ private val Colors = lightColorScheme(
 )
 
 @Composable
-fun IptvTheme(content: @Composable () -> Unit) {
+fun PlayerXTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = Colors, typography = Typography(), content = content)
 }

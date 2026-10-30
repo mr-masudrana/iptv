@@ -1,4 +1,4 @@
-package com.iptv.player
+package com.playerx.app
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -23,7 +23,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            IptvTheme {
+            PlayerXTheme {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     var showSplash by rememberSaveable { mutableStateOf(true) }
                     LaunchedEffect(Unit) {

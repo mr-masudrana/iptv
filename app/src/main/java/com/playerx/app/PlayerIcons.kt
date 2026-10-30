@@ -1,4 +1,4 @@
-package com.iptv.player
+package com.playerx.app
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor

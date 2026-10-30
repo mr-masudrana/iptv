@@ -1,8 +1,8 @@
-package com.iptv.player
+package com.playerx.app
 
 import android.app.Application
 
-class IptvApp : Application() {
+class PlayerXApp : Application() {
     override fun onCreate() {
         super.onCreate()
         PlayerManager.init(this)

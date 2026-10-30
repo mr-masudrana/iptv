@@ -31,7 +31,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: iptv-player-debug
+          name: playerx-debug
           path: app/build/outputs/apk/debug/*.apk
 
   # Pushing a tag such as v1.0.0: signed release APK + GitHub Release
@@ -91,15 +91,15 @@ jobs:
           APK=app/build/outputs/apk/release/app-release.apk
           BT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
           "$BT/apksigner" verify --print-certs "$APK"
-          cp "$APK" "IPTV-Player-${VERSION_NAME}.apk"
+          cp "$APK" "PlayerX-${VERSION_NAME}.apk"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: iptv-player-release
-          path: IPTV-Player-*.apk
+          name: playerx-release
+          path: PlayerX-*.apk
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: IPTV-Player-*.apk
+          files: PlayerX-*.apk
           generate_release_notes: true

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.IPTV" parent="android:Theme.Material.Light.NoActionBar">
+    <style name="Theme.PlayerX" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">#F4F6FB</item>
         <item name="android:statusBarColor">#F4F6FB</item>
         <item name="android:navigationBarColor">#FFFFFF</item>
@@ -8,7 +8,7 @@
         <item name="android:windowLightNavigationBar">true</item>
     </style>
 
-    <style name="Theme.IPTV.Player">
+    <style name="Theme.PlayerX.Player">
         <item name="android:windowBackground">#000000</item>
         <item name="android:statusBarColor">#000000</item>
         <item name="android:navigationBarColor">#000000</item>

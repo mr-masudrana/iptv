@@ -1,4 +1,4 @@
-package com.iptv.player
+package com.playerx.app
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -26,7 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
-/** Opening screen: the logo pops in, the name fades in, a spinner shows the app is loading. */
+/** Opening screen: the logo pops in and the name fades in. */
 @Composable
 fun SplashScreen() {
     val cs = MaterialTheme.colorScheme
@@ -61,17 +60,11 @@ fun SplashScreen() {
             )
             Spacer(Modifier.height(20.dp))
             Text(
-                "IPTV Player",
+                "PlayerX",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 color = cs.onBackground,
                 modifier = Modifier.graphicsLayer { alpha = fade.value }
-            )
-            Spacer(Modifier.height(32.dp))
-            CircularProgressIndicator(
-                modifier = Modifier.size(28.dp).graphicsLayer { alpha = fade.value },
-                strokeWidth = 3.dp,
-                color = cs.primary
             )
         }
     }
